@@ -65,7 +65,6 @@ resource "aws_s3_bucket" "orbit_storage" {
     name        = "Orbit Labs Storage"
     managedBy   = "Spacelift"
     mission     = "First Launch"
-    project     = "Orbit-labs"
     environment = "demo"
   }
 }
