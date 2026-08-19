@@ -134,26 +134,21 @@ resource "aws_security_group" "web" {
   }
 }
 
-# Latest Amazon Linux 2023 AMI, resolved at plan time - no hardcoded IDs.
-data "aws_ami" "al2023" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+# AMI is PINNED (not most_recent) so instances are stable and stateful work
+# (e.g. the WordPress DB on dev) survives. A most_recent lookup silently
+# rebuilt the whole fleet on 2026-08-19 when Amazon published a new image,
+# changing all public IPs. To move to a newer AMI, update this value
+# deliberately and accept the replacement.
+variable "ami_id" {
+  type        = string
+  description = "Pinned Amazon Linux 2023 AMI for the web fleet."
+  default     = "ami-02b3d83d84b07786d"
 }
 
 resource "aws_instance" "web" {
   for_each = toset(var.web_environments)
 
-  ami                    = data.aws_ami.al2023.id
+  ami                    = var.ami_id
   instance_type          = "t3.micro"
   subnet_id              = var.subnet_id
   vpc_security_group_ids = [aws_security_group.web.id]
