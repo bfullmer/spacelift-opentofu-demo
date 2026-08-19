@@ -1,3 +1,8 @@
+variable "subnet_id" {
+  type        = string
+  description = "ID of the subnet from networking stack"
+}
+
 terraform {
   # Written for OpenTofu (tofu >= 1.6); also valid HCL for Terraform >= 1.5.
   # Single required_providers block for the whole module - OpenTofu allows
@@ -67,5 +72,24 @@ resource "aws_s3_bucket" "orbit_storage" {
     mission     = "First Launch"
     project     = "Orbit-labs"
     environment = "demo"
+  }
+}
+
+data "aws_subnet" "selected" {
+  id = var.subnet_id
+}
+
+data "aws_vpc" "selected" {
+  id = data.aws_subnet.selected.vpc_id
+}
+
+resource "aws_security_group" "app" {
+  name        = "orbit-labs-app-sg"
+  description = "Security group for Orbit Labs app"
+  vpc_id      = data.aws_vpc.selected.id
+
+  tags = {
+    name    = "Orbit Labs App SG"
+    project = "Orbit-labs"
   }
 }
