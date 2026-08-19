@@ -97,9 +97,17 @@ resource "aws_security_group" "web" {
   vpc_id      = data.aws_subnet.selected.vpc_id
 
   ingress {
-    description = "HTTP from approved admin IP only"
+    description = "HTTP from approved admin IP only (redirects to HTTPS)"
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_ingress_cidr]
+  }
+
+  ingress {
+    description = "HTTPS from approved admin IP only"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = [var.admin_ingress_cidr]
   }
@@ -151,13 +159,31 @@ resource "aws_instance" "web" {
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.app.key_name
 
-  user_data = <<-EOF
+  user_data                   = <<-EOF
     #!/bin/bash
-    dnf install -y httpd php
+    dnf install -y httpd php mod_ssl openssl
     echo "<?php phpinfo();" > /var/www/html/index.php
     echo "<html><body><h1>Orbit Labs - ${each.key}</h1><a href=index.php>phpinfo</a></body></html>" > /var/www/html/index.html
+
+    # Self-signed cert for this instance's public IP (no domain available).
+    TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+    PUBIP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+    openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+      -keyout /etc/pki/tls/private/localhost.key \
+      -out /etc/pki/tls/certs/localhost.crt \
+      -subj "/CN=$PUBIP" -addext "subjectAltName=IP:$PUBIP"
+
+    # Force HTTPS: redirect all port-80 traffic to https on the public IP.
+    cat > /etc/httpd/conf.d/redirect-https.conf <<CONF
+    <VirtualHost *:80>
+      RewriteEngine On
+      RewriteRule ^(.*)$ https://$PUBIP\$1 [R=301,L]
+    </VirtualHost>
+    CONF
+
     systemctl enable --now httpd
   EOF
+  user_data_replace_on_change = true
 
   tags = {
     name        = "orbit-labs-web-${each.key}"
@@ -167,9 +193,9 @@ resource "aws_instance" "web" {
 }
 
 output "web_urls" {
-  description = "phpinfo URL per environment"
+  description = "phpinfo URL per environment (HTTPS, self-signed cert)"
   value = {
-    for env, inst in aws_instance.web : env => "http://${inst.public_ip}/index.php"
+    for env, inst in aws_instance.web : env => "https://${inst.public_ip}/index.php"
   }
 }
 
