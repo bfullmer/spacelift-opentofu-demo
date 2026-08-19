@@ -83,10 +83,44 @@ data "aws_vpc" "selected" {
   id = data.aws_subnet.selected.vpc_id
 }
 
+variable "ssh_ingress_cidr" {
+  type        = string
+  description = "CIDR allowed to SSH to the app instances (Brett's IP /32)."
+  # Brett's public IP as of 2026-08-18. Update if your ISP reassigns it,
+  # or override with TF_VAR_ssh_ingress_cidr in the Spacelift environment.
+  default = "164.152.178.200/32"
+}
+
+resource "aws_key_pair" "app" {
+  key_name   = "orbit-labs-app"
+  public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICmsrERSIAmACx6uxiePMYWsEuaMf/UbreaHE5YjVSTo orbit-labs-app"
+
+  tags = {
+    name    = "Orbit Labs App Key"
+    project = "Orbit-labs"
+  }
+}
+
 resource "aws_security_group" "app" {
   name        = "orbit-labs-app-sg"
   description = "Security group for Orbit Labs app"
   vpc_id      = data.aws_vpc.selected.id
+
+  ingress {
+    description = "SSH from Brett's IP only"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.ssh_ingress_cidr]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
   tags = {
     name    = "Orbit Labs App SG"
@@ -115,6 +149,7 @@ resource "aws_instance" "app" {
   instance_type          = "t3.micro"
   subnet_id              = var.subnet_id
   vpc_security_group_ids = [aws_security_group.app.id]
+  key_name               = aws_key_pair.app.key_name
 
   tags = {
     name    = "Orbit Labs App Server"
@@ -132,11 +167,17 @@ output "instance_private_ip" {
   description = "Private IP of the app EC2 instance"
 }
 
+output "instance_public_ip" {
+  value       = aws_instance.app.public_ip
+  description = "Public IP of the app EC2 instance"
+}
+
 resource "aws_instance" "app_2" {
   ami                    = data.aws_ami.al2023.id
   instance_type          = "t3.micro"
   subnet_id              = var.subnet_id
   vpc_security_group_ids = [aws_security_group.app.id]
+  key_name               = aws_key_pair.app.key_name
 
   tags = {
     name    = "Orbit Labs App Server 2"
@@ -152,4 +193,9 @@ output "instance_2_id" {
 output "instance_2_private_ip" {
   value       = aws_instance.app_2.private_ip
   description = "Private IP of the second app EC2 instance"
+}
+
+output "instance_2_public_ip" {
+  value       = aws_instance.app_2.public_ip
+  description = "Public IP of the second app EC2 instance"
 }
