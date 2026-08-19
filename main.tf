@@ -107,7 +107,7 @@ resource "aws_security_group" "app" {
   vpc_id      = data.aws_vpc.selected.id
 
   ingress {
-    description = "SSH from Brett's IP only"
+    description = "SSH from approved admin IP only"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
