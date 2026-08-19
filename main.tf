@@ -189,6 +189,83 @@ resource "aws_instance" "web" {
   }
 }
 
+resource "aws_security_group" "db" {
+  name        = "orbit-labs-db-sg"
+  description = "MariaDB: 3306 from web servers only, SSH from admin IP"
+  vpc_id      = data.aws_subnet.selected.vpc_id
+
+  ingress {
+    description     = "MariaDB from web security group only"
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web.id]
+  }
+
+  ingress {
+    description = "SSH from approved admin IP only"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_ingress_cidr]
+  }
+
+  egress {
+    description = "All outbound (package installs)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    name    = "Orbit Labs DB SG"
+    project = "Orbit-labs"
+  }
+}
+
+resource "aws_instance" "db" {
+  ami                    = var.ami_id
+  instance_type          = "t3.micro"
+  subnet_id              = var.subnet_id
+  vpc_security_group_ids = [aws_security_group.db.id]
+  key_name               = aws_key_pair.app.key_name
+
+  user_data                   = <<-EOF
+    #!/bin/bash
+    dnf install -y mariadb105-server
+    systemctl enable --now mariadb
+    # Generate the WordPress DB password ON this box; readable by root only.
+    # Never committed to Git or Terraform state.
+    DBPASS=$(openssl rand -base64 18)
+    install -m 600 /dev/null /root/wp-db-pass
+    echo "$DBPASS" > /root/wp-db-pass
+    mysql <<SQL
+    CREATE DATABASE IF NOT EXISTS wordpress;
+    CREATE USER IF NOT EXISTS 'wpuser'@'10.0.1.%' IDENTIFIED BY '$DBPASS';
+    GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'10.0.1.%';
+    FLUSH PRIVILEGES;
+    SQL
+  EOF
+  user_data_replace_on_change = false
+
+  tags = {
+    name    = "orbit-labs-db"
+    role    = "database"
+    project = "Orbit-labs"
+  }
+}
+
+output "db_private_ip" {
+  description = "Private IP of the MariaDB instance (VPC-internal only)"
+  value       = aws_instance.db.private_ip
+}
+
+output "db_public_ip" {
+  description = "Public IP of the MariaDB instance (SSH management only)"
+  value       = aws_instance.db.public_ip
+}
+
 output "web_urls" {
   description = "phpinfo URL per environment (HTTPS, self-signed cert)"
   value = {
