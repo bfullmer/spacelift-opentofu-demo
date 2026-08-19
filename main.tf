@@ -131,3 +131,25 @@ output "instance_private_ip" {
   value       = aws_instance.app.private_ip
   description = "Private IP of the app EC2 instance"
 }
+
+resource "aws_instance" "app_2" {
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = "t3.micro"
+  subnet_id              = var.subnet_id
+  vpc_security_group_ids = [aws_security_group.app.id]
+
+  tags = {
+    name    = "Orbit Labs App Server 2"
+    project = "Orbit-labs"
+  }
+}
+
+output "instance_2_id" {
+  value       = aws_instance.app_2.id
+  description = "ID of the second app EC2 instance"
+}
+
+output "instance_2_private_ip" {
+  value       = aws_instance.app_2.private_ip
+  description = "Private IP of the second app EC2 instance"
+}
