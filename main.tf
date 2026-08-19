@@ -159,11 +159,11 @@ resource "aws_instance" "web" {
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.app.key_name
 
-  user_data                   = <<-EOF
+  user_data = <<-EOF
     #!/bin/bash
     dnf install -y httpd php mod_ssl openssl
     echo "<?php phpinfo();" > /var/www/html/index.php
-    echo "<html><body><h1>Orbit Labs - ${each.key}</h1><a href=index.php>phpinfo</a></body></html>" > /var/www/html/index.html
+    echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=index.php"></head><body>Redirecting to <a href="index.php">phpinfo</a>...</body></html>' > /var/www/html/index.html
 
     # Self-signed cert for this instance's public IP (no domain available).
     TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
@@ -183,7 +183,9 @@ resource "aws_instance" "web" {
 
     systemctl enable --now httpd
   EOF
-  user_data_replace_on_change = true
+  # Kept false so boot-script tweaks don't force-replace running instances
+  # (which would change public IPs and invalidate the local certs/hosts trust).
+  user_data_replace_on_change = false
 
   tags = {
     name        = "orbit-labs-web-${each.key}"
