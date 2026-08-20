@@ -37,8 +37,8 @@ variable "subnet_ids" {
 
 variable "environments" {
   type        = list(string)
-  description = "Environments: sandbox, staging, production."
-  default     = ["sandbox", "staging", "production"]
+  description = "Environments: sandbox, staging, production. Narrowed to production only 2026-08-20 - sandbox/staging were the tested/disposable tier, torn down after testing. Every resource here is for_each'd over this list, so restoring an entry just means adding it back."
+  default     = ["production"]
 }
 
 variable "admin_ingress_cidr" {
