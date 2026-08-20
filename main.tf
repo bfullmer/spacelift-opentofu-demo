@@ -249,10 +249,18 @@ locals {
   # the stop/start a resize requires, unless an Elastic IP is attached
   # (see aws_eip.east_web_prod / west_web_prod below) - EIPs stay
   # associated across a stop/start by design.
+  #
+  # t3.medium was attempted 2026-08-20 and rejected outright by AWS:
+  # "FreeTierRestrictionError: This operation is not available for free
+  # plan accounts." This account cannot run anything above *.micro until
+  # the AWS plan itself is upgraded - reverted back to t3.micro everywhere.
+  # The AMI-swap test below (ami_id_east_production) exercises the same
+  # "does the address survive a change" question through a mechanism this
+  # account *can* actually perform.
   instance_type = {
     sandbox    = "t3.micro"
     staging    = "t3.micro"
-    production = "t3.medium"
+    production = "t3.micro"
   }
 
   # East web and db share one subnet (cidrsubnet(base, 8, 0)) in this
@@ -478,6 +486,30 @@ resource "aws_eip" "west_web_prod" {
     Name    = "Moonlight production West Web EIP"
     project = "Moonlight"
   }
+}
+
+# Recovery from the rejected t3.medium attempt above: AWS stops an
+# instance before attempting an instance-type change, then rejects the
+# change itself on a free-tier account, leaving the instance stopped with
+# its type unchanged. A plain revert of instance_type back to "t3.micro"
+# doesn't undo that stop by itself (Terraform doesn't treat running/
+# stopped as part of the instance_type diff), so this explicitly forces
+# every production instance back to running regardless of which ones
+# actually got stopped. No-op (and harmless) for any already running.
+resource "aws_ec2_instance_state" "east_db_prod" {
+  instance_id = aws_instance.east_db["production"].id
+  state       = "running"
+}
+
+resource "aws_ec2_instance_state" "east_web_prod" {
+  instance_id = aws_instance.east_web["production"].id
+  state       = "running"
+}
+
+resource "aws_ec2_instance_state" "west_web_prod" {
+  provider    = aws.west
+  instance_id = aws_instance.west_web["production"].id
+  state       = "running"
 }
 
 output "east_urls" {
