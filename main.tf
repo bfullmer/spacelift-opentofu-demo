@@ -72,6 +72,39 @@ variable "ami_id_west" {
   default     = "ami-0151cebd38515a41d"
 }
 
+# Production-only AMI swap test: does changing the AMI (a ForceNew
+# attribute - full instance replacement, unlike instance_type) still
+# preserve the public address, now that production has an Elastic IP?
+# One-time most_recent lookup, same two-step pin-then-delete discipline
+# as every other AMI change this session.
+data "aws_ami" "al2023_east_latest" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+output "ami_id_east_production_resolved" {
+  description = "Pin this as ami_id_east_production's default in the next commit, then delete the data source above."
+  value       = data.aws_ami.al2023_east_latest.id
+}
+
+locals {
+  ami_id_east = {
+    sandbox    = var.ami_id_east
+    staging    = var.ami_id_east
+    production = data.aws_ami.al2023_east_latest.id
+  }
+}
+
 data "aws_subnet" "east" {
   for_each = toset(var.environments)
   id       = var.subnet_ids["${each.key}_east"]
@@ -394,7 +427,7 @@ locals {
 
 resource "aws_instance" "east_db" {
   for_each               = toset(var.environments)
-  ami                    = var.ami_id_east
+  ami                    = local.ami_id_east[each.key]
   instance_type          = local.instance_type[each.key]
   subnet_id              = var.subnet_ids["${each.key}_east"]
   vpc_security_group_ids = [aws_security_group.east_db[each.key].id]
@@ -424,7 +457,7 @@ resource "aws_instance" "east_db" {
 
 resource "aws_instance" "east_web" {
   for_each               = toset(var.environments)
-  ami                    = var.ami_id_east
+  ami                    = local.ami_id_east[each.key]
   instance_type          = local.instance_type[each.key]
   subnet_id              = var.subnet_ids["${each.key}_east"]
   vpc_security_group_ids = [aws_security_group.east_web[each.key].id]
