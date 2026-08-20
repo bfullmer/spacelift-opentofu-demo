@@ -274,15 +274,15 @@ locals {
   #
   # t3.medium was attempted 2026-08-20 and rejected outright by AWS:
   # "FreeTierRestrictionError: This operation is not available for free
-  # plan accounts." This account cannot run anything above *.micro until
-  # the AWS plan itself is upgraded - reverted back to t3.micro everywhere.
-  # The AMI-swap test below (ami_id_east_production) exercises the same
-  # "does the address survive a change" question through a mechanism this
-  # account *can* actually perform.
+  # plan accounts." Brett's own EC2 > Instance Types console page shows
+  # t3.small (unlike t3.medium) marked "Free tier eligible: true" on this
+  # account, so trying that instead - a real step up (2x the memory of
+  # micro) without assuming the blanket "nothing above micro" conclusion
+  # drawn from the medium rejection alone.
   instance_type = {
     sandbox    = "t3.micro"
     staging    = "t3.micro"
-    production = "t3.micro"
+    production = "t3.small"
   }
 
   # East web and db share one subnet (cidrsubnet(base, 8, 0)) in this
