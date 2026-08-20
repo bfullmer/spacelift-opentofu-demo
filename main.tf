@@ -106,7 +106,7 @@ resource "aws_security_group" "web" {
   }
 
   ingress {
-    description = "HTTP from anywhere - required for Let's Encrypt HTTP-01 validation and the 80->443 redirect"
+    description = "HTTP from anywhere - required for Lets Encrypt HTTP-01 validation and the 80-443 redirect"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
