@@ -227,31 +227,14 @@ variable "ami_id" {
   default     = "ami-02b3d83d84b07786d"
 }
 
-# AMI IDs are region-specific - the us-east-1 pin above doesn't exist in
-# us-west-2. This data source is a ONE-TIME lookup to discover the current
-# Oregon AL2023 AMI ID; the very next commit after this apply hardcodes the
-# resolved value as a pinned default (see ami_id above) and removes this
-# data source, so it never runs on a later apply and can't cause the same
-# fleet-replacement surprise most_recent caused in us-east-1.
-data "aws_ami" "al2023_oregon" {
-  provider    = aws.oregon
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-output "ami_id_oregon_resolved" {
-  description = "Oregon AMI ID resolved by the one-time lookup above - pin this as a fixed default in the next commit, then delete the data source."
-  value       = data.aws_ami.al2023_oregon.id
+# Resolved once via a temporary `most_recent` data source (2026-08-19),
+# then pinned here and the data source removed - same discipline as ami_id
+# above, so a future AWS image publish in Oregon can't silently replace
+# this fleet either.
+variable "ami_id_oregon" {
+  type        = string
+  description = "Pinned Amazon Linux 2023 AMI for the web fleet (us-west-2)."
+  default     = "ami-01309f00031b5ec72"
 }
 
 locals {
@@ -424,7 +407,7 @@ resource "aws_instance" "web_oregon" {
   provider = aws.oregon
   for_each = toset(var.web_environments)
 
-  ami                    = data.aws_ami.al2023_oregon.id
+  ami                    = var.ami_id_oregon
   instance_type          = "t3.micro"
   subnet_id              = var.subnet_id_oregon
   vpc_security_group_ids = [aws_security_group.web_oregon.id]
