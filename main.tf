@@ -19,11 +19,6 @@ provider "aws" {
   region = "us-east-1"
 }
 
-provider "aws" {
-  alias  = "west"
-  region = "us-west-1"
-}
-
 data "aws_caller_identity" "current" {}
 
 output "aws_account_id" {
@@ -32,7 +27,7 @@ output "aws_account_id" {
 
 variable "subnet_ids" {
   type        = map(string)
-  description = "Subnet IDs from the networking stack, keyed '<env>_east' / '<env>_west'."
+  description = "Subnet IDs from the networking stack, keyed '<env>_east'. West (us-west-1) was removed 2026-08-20 - see git history for the two-region version."
 }
 
 variable "environments" {
@@ -62,16 +57,6 @@ variable "ami_id_east" {
   default     = "ami-02b3d83d84b07786d"
 }
 
-# Resolved once via a temporary `most_recent` data source, then pinned
-# here and the data source removed - same discipline used for Oregon
-# earlier, after an unpinned most_recent lookup once silently replaced an
-# entire running fleet mid-session when AWS published a new image.
-variable "ami_id_west" {
-  type        = string
-  description = "Pinned Amazon Linux 2023 AMI, us-west-1."
-  default     = "ami-0151cebd38515a41d"
-}
-
 # Production gets its own independently-pinned AMI, separate from
 # sandbox/staging - this is the knob to turn for a real AMI-swap test
 # (change the default below to any other valid us-east-1 AMI ID and
@@ -99,29 +84,13 @@ data "aws_subnet" "east" {
   id       = var.subnet_ids["${each.key}_east"]
 }
 
-data "aws_subnet" "west" {
-  for_each = toset(var.environments)
-  provider = aws.west
-  id       = var.subnet_ids["${each.key}_west"]
-}
-
-# Key pairs are region-scoped, so one per region (shared across all 3
-# environments in that region, not per-environment).
+# Region-scoped, so one per region (shared across every environment in
+# that region, not per-environment).
 resource "aws_key_pair" "east" {
   key_name   = "moonlight-east-app"
   public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICmsrERSIAmACx6uxiePMYWsEuaMf/UbreaHE5YjVSTo orbit-labs-app"
   tags = {
     Name    = "Moonlight East App Key"
-    project = "Moonlight"
-  }
-}
-
-resource "aws_key_pair" "west" {
-  provider   = aws.west
-  key_name   = "moonlight-west-app"
-  public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICmsrERSIAmACx6uxiePMYWsEuaMf/UbreaHE5YjVSTo orbit-labs-app"
-  tags = {
-    Name    = "Moonlight West App Key"
     project = "Moonlight"
   }
 }
@@ -206,57 +175,12 @@ resource "aws_security_group" "east_db" {
   }
 }
 
-resource "aws_security_group" "west_web" {
-  for_each    = toset(var.environments)
-  provider    = aws.west
-  name        = "moonlight-${each.key}-west-web-sg"
-  description = "West web tier: HTTP/HTTPS/SSH from admin IP only."
-  vpc_id      = data.aws_subnet.west[each.key].vpc_id
-
-  ingress {
-    description = "HTTP from admin IP (redirects to HTTPS)"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_ingress_cidr]
-  }
-
-  ingress {
-    description = "HTTPS from admin IP"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_ingress_cidr]
-  }
-
-  ingress {
-    description = "SSH from admin IP"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_ingress_cidr]
-  }
-
-  egress {
-    description = "All outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name    = "Moonlight ${each.key} West Web SG"
-    project = "Moonlight"
-  }
-}
-
 # Shared secret between each environment's east-db and east-web (two
 # independent instances, no coordination channel between their boot
 # scripts) - Terraform-managed rather than on-box, same tradeoff made for
 # Orbit Labs' prod tier. `special = false` avoids any quote-escaping risk
 # in the generated SQL. WordPress *admin* passwords stay on-box generated
-# (see boot scripts below) since SSH is available on every instance this
+# (see boot script below) since SSH is available on every instance this
 # time - no need to route them through Terraform state.
 resource "random_password" "east_db" {
   for_each = toset(var.environments)
@@ -265,20 +189,20 @@ resource "random_password" "east_db" {
 }
 
 locals {
-  # Production runs bigger instances than sandbox/staging. instance_type
+  # Production runs a bigger instance than sandbox/staging. instance_type
   # is an in-place Terraform update (not ForceNew) - same instance ID,
   # same private IP, no replacement. The public IP would still churn on
   # the stop/start a resize requires, unless an Elastic IP is attached
-  # (see aws_eip.east_web_prod / west_web_prod below) - EIPs stay
-  # associated across a stop/start by design.
+  # (see aws_eip.east_web_prod below) - EIPs stay associated across a
+  # stop/start by design.
   #
   # t3.medium was attempted 2026-08-20 and rejected outright by AWS:
   # "FreeTierRestrictionError: This operation is not available for free
   # plan accounts." Brett's own EC2 > Instance Types console page shows
   # t3.small (unlike t3.medium) marked "Free tier eligible: true" on this
-  # account, so trying that instead - a real step up (2x the memory of
-  # micro) without assuming the blanket "nothing above micro" conclusion
-  # drawn from the medium rejection alone.
+  # account, so that's what's running now - a real step up (2x the memory
+  # of micro) without assuming the blanket "nothing above micro"
+  # conclusion drawn from the medium rejection alone.
   instance_type = {
     sandbox    = "t3.micro"
     staging    = "t3.micro"
@@ -311,69 +235,6 @@ locals {
       cd /var/www/html
       cp -f wp-config-sample.php wp-config.php
       sed -i "s/database_name_here/wordpress/; s/username_here/wpuser/; s#password_here#${random_password.east_db[env].result}#; s/localhost/${aws_instance.east_db[env].private_ip}/" wp-config.php
-
-      python3 - <<'PY'
-      import urllib.request
-      salts = urllib.request.urlopen('https://api.wordpress.org/secret-key/1.1/salt/').read().decode()
-      p = '/var/www/html/wp-config.php'
-      out = []
-      done = False
-      for l in open(p):
-          if 'put your unique phrase here' in l:
-              if not done:
-                  out.append(salts + '\n')
-                  done = True
-              continue
-          out.append(l)
-      open(p, 'w').write(''.join(out))
-      PY
-
-      chown -R apache:apache /var/www/html
-
-      curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-      chmod +x wp-cli.phar
-      mv wp-cli.phar /usr/local/bin/wp
-
-      openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
-        -keyout /etc/pki/tls/private/localhost.key \
-        -out /etc/pki/tls/certs/localhost.crt \
-        -subj "/CN=$HOSTNAME" -addext "subjectAltName=DNS:$HOSTNAME"
-
-      cat > /etc/httpd/conf.d/redirect-https.conf <<CONF
-      <VirtualHost *:80>
-        RewriteEngine On
-        RewriteRule ^(.*)$ https://$HOSTNAME\$1 [R=301,L]
-      </VirtualHost>
-      CONF
-
-      systemctl enable --now httpd
-    EOF
-  }
-
-  west_web_user_data = {
-    for env in var.environments : env => <<-EOF
-      #!/bin/bash
-      HOSTNAME="${env}-west.${var.dns_zone}"
-
-      dnf install -y httpd php php-mysqlnd mod_ssl openssl mariadb105-server
-      systemctl enable --now mariadb
-
-      DBPASS=$(openssl rand -base64 18)
-      mysql <<SQL
-      CREATE DATABASE IF NOT EXISTS wordpress;
-      CREATE USER IF NOT EXISTS 'wpuser'@'localhost' IDENTIFIED BY '$DBPASS';
-      GRANT ALL PRIVILEGES ON wordpress.* TO 'wpuser'@'localhost';
-      FLUSH PRIVILEGES;
-      SQL
-
-      cd /tmp
-      curl -sO https://wordpress.org/latest.tar.gz
-      tar xzf latest.tar.gz
-      rm -f /var/www/html/index.html /var/www/html/index.php
-      cp -rf wordpress/* /var/www/html/
-      cd /var/www/html
-      cp -f wp-config-sample.php wp-config.php
-      sed -i "s/database_name_here/wordpress/; s/username_here/wpuser/; s#password_here#$DBPASS#" wp-config.php
 
       python3 - <<'PY'
       import urllib.request
@@ -464,33 +325,12 @@ resource "aws_instance" "east_web" {
   }
 }
 
-resource "aws_instance" "west_web" {
-  for_each               = toset(var.environments)
-  provider               = aws.west
-  ami                    = var.ami_id_west
-  instance_type          = local.instance_type[each.key]
-  subnet_id              = var.subnet_ids["${each.key}_west"]
-  vpc_security_group_ids = [aws_security_group.west_web[each.key].id]
-  key_name               = aws_key_pair.west.key_name
-
-  user_data                   = local.west_web_user_data[each.key]
-  user_data_replace_on_change = false
-
-  tags = {
-    Name    = "moonlight-${each.key}-west-web"
-    env     = each.key
-    tier    = "web"
-    region  = "west"
-    project = "Moonlight"
-  }
-}
-
-# Production-only Elastic IPs: nothing else in this build gets one -
-# sandbox/staging stay disposable and cheap to churn. Without these, a
+# Production-only Elastic IP: nothing else in this build gets one -
+# sandbox/staging stay disposable and cheap to churn. Without this, a
 # future instance_type or AMI change on production would silently lose
 # its public address the same way Orbit Labs' fleet did earlier this
-# session. db instances don't need one - nothing external connects to
-# them directly.
+# session. The db instance doesn't need one - nothing external connects
+# to it directly.
 resource "aws_eip" "east_web_prod" {
   instance = aws_instance.east_web["production"].id
   domain   = "vpc"
@@ -500,24 +340,14 @@ resource "aws_eip" "east_web_prod" {
   }
 }
 
-resource "aws_eip" "west_web_prod" {
-  provider = aws.west
-  instance = aws_instance.west_web["production"].id
-  domain   = "vpc"
-  tags = {
-    Name    = "Moonlight production West Web EIP"
-    project = "Moonlight"
-  }
-}
-
-# Recovery from the rejected t3.medium attempt above: AWS stops an
-# instance before attempting an instance-type change, then rejects the
-# change itself on a free-tier account, leaving the instance stopped with
-# its type unchanged. A plain revert of instance_type back to "t3.micro"
-# doesn't undo that stop by itself (Terraform doesn't treat running/
-# stopped as part of the instance_type diff), so this explicitly forces
-# every production instance back to running regardless of which ones
-# actually got stopped. No-op (and harmless) for any already running.
+# Recovery from the rejected t3.medium attempt: AWS stops an instance
+# before attempting an instance-type change, then rejects the change
+# itself on a free-tier account, leaving the instance stopped with its
+# type unchanged. A plain revert of instance_type doesn't undo that stop
+# by itself (Terraform doesn't treat running/stopped as part of the
+# instance_type diff), so this explicitly forces production's instances
+# back to running regardless of which ones actually got stopped. No-op
+# (and harmless) for any already running.
 resource "aws_ec2_instance_state" "east_db_prod" {
   instance_id = aws_instance.east_db["production"].id
   state       = "running"
@@ -525,12 +355,6 @@ resource "aws_ec2_instance_state" "east_db_prod" {
 
 resource "aws_ec2_instance_state" "east_web_prod" {
   instance_id = aws_instance.east_web["production"].id
-  state       = "running"
-}
-
-resource "aws_ec2_instance_state" "west_web_prod" {
-  provider    = aws.west
-  instance_id = aws_instance.west_web["production"].id
   state       = "running"
 }
 
@@ -560,23 +384,9 @@ output "east_db_public_ips" {
   }
 }
 
-output "west_urls" {
-  description = "WordPress URL per environment, West."
-  value = {
-    for env in var.environments : env => "https://${env}-west.${var.dns_zone}/"
-  }
-}
-
-output "west_public_ips" {
-  value = {
-    for env, inst in aws_instance.west_web : env => inst.public_ip
-  }
-}
-
 output "all_hosts_entries" {
-  description = "Lines to add to /etc/hosts for local warning-free HTTPS access to all 6 web nodes."
-  value = merge(
-    { for env, inst in aws_instance.east_web : "${env}-east" => "${inst.public_ip} ${env}-east.${var.dns_zone}" },
-    { for env, inst in aws_instance.west_web : "${env}-west" => "${inst.public_ip} ${env}-west.${var.dns_zone}" }
-  )
+  description = "Lines to add to /etc/hosts for local warning-free HTTPS access."
+  value = {
+    for env, inst in aws_instance.east_web : "${env}-east" => "${inst.public_ip} ${env}-east.${var.dns_zone}"
+  }
 }
