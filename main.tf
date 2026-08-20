@@ -6,8 +6,11 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
-      version = "~> 6.0"
+      source = "hashicorp/aws"
+      # Pinned below the latest minor: v6.61.0 shipped 2026-08-19 with no
+      # linux_amd64 package on the registry (upstream publishing issue, not
+      # a config problem here) and broke every run until pinned back.
+      version = "~> 6.60.0"
     }
     random = {
       source  = "hashicorp/random"
