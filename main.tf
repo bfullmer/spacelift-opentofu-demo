@@ -106,6 +106,14 @@ resource "aws_security_group" "web" {
   }
 
   ingress {
+    description = "HTTP from anywhere - required for Let's Encrypt HTTP-01 validation and the 80->443 redirect"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
     description = "SSH from admin IP only"
     from_port   = 22
     to_port     = 22
@@ -146,7 +154,51 @@ resource "aws_instance" "web" {
       -out /etc/pki/tls/certs/localhost.crt \
       -subj "/CN=$PUBIP" -addext "subjectAltName=IP:$PUBIP"
 
-    echo "<html><body><h1>Pulsar</h1><p>Served over HTTPS from $PUBIP</p></body></html>" > /var/www/html/index.html
+    cat > /var/www/html/index.html <<HTMLEOF
+    <!doctype html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pulsar</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #0f172a;
+        color: #e2e8f0;
+      }
+      main {
+        max-width: 32rem;
+        width: 100%;
+        text-align: center;
+      }
+      h1 {
+        font-size: clamp(1.75rem, 6vw, 2.75rem);
+        margin: 0 0 0.5rem;
+      }
+      p {
+        font-size: clamp(0.95rem, 3vw, 1.1rem);
+        color: #94a3b8;
+        word-break: break-word;
+      }
+    </style>
+    </head>
+    <body>
+    <main>
+      <h1>Pulsar</h1>
+      <p>Served over HTTPS from $PUBIP</p>
+    </main>
+    </body>
+    </html>
+    HTMLEOF
 
     systemctl enable --now httpd
   EOF
