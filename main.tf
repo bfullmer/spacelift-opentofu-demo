@@ -8,10 +8,6 @@ terraform {
       # package on the registry).
       version = "~> 6.60.0"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
   }
 }
 
@@ -19,20 +15,159 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# Kept during teardown even though no resources reference it: Terraform
-# needs a provider's config present to destroy resources created with it.
-# The previous commit removed this alias while west resources were still
-# in state, which orphaned them and failed the run - re-added here so the
-# full teardown can actually destroy them. Drop both this and the east
-# provider in a follow-up only after the destroy completes clean.
-provider "aws" {
-  alias  = "west"
-  region = "us-west-1"
+# Single self-contained stack this time: own VPC, one instance. No second
+# networking stack, no Spacelift stack-dependency wiring - that pattern
+# was exercised thoroughly in the Moonlight lab (see git history); this
+# build optimizes for simplicity instead.
+
+variable "admin_ingress_cidr" {
+  type        = string
+  description = "CIDR allowed to SSH in. HTTPS (443) is open to the internet by design; SSH stays admin-only."
+  # Brett's public IP as of 2026-08-20.
+  default = "164.152.178.200/32"
 }
 
-# Full lab teardown (2026-08-20): Moonlight multi-region lab is done.
-# Everything - production included - is removed. The full two-region,
-# three-environment configuration lives in git history (commit 4dea573
-# and earlier); ~/.claude/skills/orbit-labs has the general rebuild
-# lessons (stack dependency wiring, AMI pinning, provider-kept-during-
-# teardown, EIP behavior).
+# Pinned AMI (never most_recent - an unpinned lookup once replaced an
+# entire running fleet mid-session when AWS published a new image).
+variable "ami_id" {
+  type        = string
+  description = "Pinned Amazon Linux 2023 AMI, us-east-1."
+  default     = "ami-02b3d83d84b07786d"
+}
+
+resource "aws_vpc" "main" {
+  cidr_block           = "10.40.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name    = "pulsar-vpc"
+    project = "Pulsar"
+  }
+}
+
+resource "aws_subnet" "main" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.40.0.0/24"
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = true
+  tags = {
+    Name    = "pulsar-subnet"
+    project = "Pulsar"
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+  tags = {
+    Name    = "pulsar-igw"
+    project = "Pulsar"
+  }
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = {
+    Name    = "pulsar-rt"
+    project = "Pulsar"
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.main.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_key_pair" "main" {
+  key_name   = "pulsar-app"
+  public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICmsrERSIAmACx6uxiePMYWsEuaMf/UbreaHE5YjVSTo orbit-labs-app"
+  tags = {
+    Name    = "Pulsar App Key"
+    project = "Pulsar"
+  }
+}
+
+resource "aws_security_group" "web" {
+  name        = "pulsar-web-sg"
+  description = "HTTPS open to the internet; SSH from admin IP only"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTPS from anywhere - intentionally public"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "SSH from admin IP only"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_ingress_cidr]
+  }
+
+  egress {
+    description = "All outbound (package installs)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name    = "Pulsar Web SG"
+    project = "Pulsar"
+  }
+}
+
+resource "aws_instance" "web" {
+  ami                    = var.ami_id
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.main.id
+  vpc_security_group_ids = [aws_security_group.web.id]
+  key_name               = aws_key_pair.main.key_name
+
+  user_data                   = <<-EOF
+    #!/bin/bash
+    dnf install -y httpd mod_ssl openssl
+
+    TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+    PUBIP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+
+    openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+      -keyout /etc/pki/tls/private/localhost.key \
+      -out /etc/pki/tls/certs/localhost.crt \
+      -subj "/CN=$PUBIP" -addext "subjectAltName=IP:$PUBIP"
+
+    echo "<html><body><h1>Pulsar</h1><p>Served over HTTPS from $PUBIP</p></body></html>" > /var/www/html/index.html
+
+    systemctl enable --now httpd
+  EOF
+  user_data_replace_on_change = false
+
+  tags = {
+    Name    = "pulsar-web"
+    project = "Pulsar"
+  }
+}
+
+output "public_ip" {
+  value = aws_instance.web.public_ip
+}
+
+output "https_url" {
+  description = "Open to the internet (self-signed cert, expect a browser warning)."
+  value       = "https://${aws_instance.web.public_ip}/"
+}
+
+output "ssh_command" {
+  description = "SSH access, admin IP only."
+  value       = "ssh -i ~/.ssh/orbit-labs-app ec2-user@${aws_instance.web.public_ip}"
+}
