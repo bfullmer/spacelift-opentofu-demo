@@ -72,36 +72,25 @@ variable "ami_id_west" {
   default     = "ami-0151cebd38515a41d"
 }
 
-# Production-only AMI swap test: does changing the AMI (a ForceNew
-# attribute - full instance replacement, unlike instance_type) still
-# preserve the public address, now that production has an Elastic IP?
-# One-time most_recent lookup, same two-step pin-then-delete discipline
-# as every other AMI change this session.
-data "aws_ami" "al2023_east_latest" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-output "ami_id_east_production_resolved" {
-  description = "Pin this as ami_id_east_production's default in the next commit, then delete the data source above."
-  value       = data.aws_ami.al2023_east_latest.id
+# Production gets its own independently-pinned AMI, separate from
+# sandbox/staging - this is the knob to turn for a real AMI-swap test
+# (change the default below to any other valid us-east-1 AMI ID and
+# apply; the Elastic IP added earlier should re-associate automatically
+# to the replacement instance). Resolved once via a temporary
+# most_recent lookup on 2026-08-20, which turned up the same AMI already
+# pinned for sandbox/staging - no newer AL2023 image has shipped since
+# yesterday's pin, so this apply caused no actual replacement.
+variable "ami_id_east_production" {
+  type        = string
+  description = "Pinned Amazon Linux 2023 AMI for production, us-east-1. Change this and apply to test an AMI swap."
+  default     = "ami-02b3d83d84b07786d"
 }
 
 locals {
   ami_id_east = {
     sandbox    = var.ami_id_east
     staging    = var.ami_id_east
-    production = data.aws_ami.al2023_east_latest.id
+    production = var.ami_id_east_production
   }
 }
 
