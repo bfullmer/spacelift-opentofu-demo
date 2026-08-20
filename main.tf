@@ -27,15 +27,6 @@ provider "aws" {
   region = "us-east-1"
 }
 
-# Kept during teardown even though no resources reference it here: Terraform
-# needs a provider's config present in the plan to destroy resources that
-# were created with it, even after those resources' own blocks are removed
-# from the file. Remove this once the destroy has actually finished.
-provider "aws" {
-  alias  = "oregon"
-  region = "us-west-2"
-}
-
 # Read-only proof the Spacelift AWS integration works: queries the caller
 # identity, creates nothing, costs nothing.
 data "aws_caller_identity" "current" {}
