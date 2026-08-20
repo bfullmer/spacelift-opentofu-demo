@@ -137,7 +137,7 @@ resource "aws_security_group" "web" {
 
 resource "aws_instance" "web" {
   ami                    = var.ami_id
-  instance_type          = "t3.micro"
+  instance_type          = "t3.small"
   subnet_id              = aws_subnet.main.id
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.main.key_name
@@ -232,7 +232,7 @@ resource "aws_eip" "web" {
 # again or the EIP is released.
 resource "aws_ec2_instance_state" "web" {
   instance_id = aws_instance.web.id
-  state       = "stopped"
+  state       = "running"
 }
 
 output "public_ip" {
