@@ -62,31 +62,14 @@ variable "ami_id_east" {
   default     = "ami-02b3d83d84b07786d"
 }
 
-# us-west-1 (California) is a brand-new region for this build - distinct
-# from the us-west-2 (Oregon) region Moonlight used. One-time most_recent
-# lookup to discover the current AL2023 AMI ID; the very next commit
-# hardcodes the resolved value and deletes this data source - same
-# discipline used for Oregon earlier, after an unpinned most_recent lookup
-# once silently replaced an entire running fleet mid-session.
-data "aws_ami" "al2023_west" {
-  provider    = aws.west
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-output "ami_id_west_resolved" {
-  description = "Pin this as a fixed default in the next commit, then delete the data source above."
-  value       = data.aws_ami.al2023_west.id
+# Resolved once via a temporary `most_recent` data source, then pinned
+# here and the data source removed - same discipline used for Oregon
+# earlier, after an unpinned most_recent lookup once silently replaced an
+# entire running fleet mid-session when AWS published a new image.
+variable "ami_id_west" {
+  type        = string
+  description = "Pinned Amazon Linux 2023 AMI, us-west-1."
+  default     = "ami-0151cebd38515a41d"
 }
 
 data "aws_subnet" "east" {
@@ -260,10 +243,27 @@ resource "random_password" "east_db" {
 }
 
 locals {
+  # Production runs bigger instances than sandbox/staging. instance_type
+  # is an in-place Terraform update (not ForceNew) - same instance ID,
+  # same private IP, no replacement. The public IP would still churn on
+  # the stop/start a resize requires, unless an Elastic IP is attached
+  # (see aws_eip.east_web_prod / west_web_prod below) - EIPs stay
+  # associated across a stop/start by design.
+  instance_type = {
+    sandbox    = "t3.micro"
+    staging    = "t3.micro"
+    production = "t3.medium"
+  }
+
+  # East web and db share one subnet (cidrsubnet(base, 8, 0)) in this
+  # build - a leftover from an earlier draft with a separate private /24
+  # briefly gave this the wrong octet (.1.%) and broke every db grant
+  # until fixed live via RENAME USER; fixed here too so a rebuild doesn't
+  # reintroduce it.
   east_db_host_pattern = {
-    sandbox    = "10.10.1.%"
-    staging    = "10.20.1.%"
-    production = "10.30.1.%"
+    sandbox    = "10.10.0.%"
+    staging    = "10.20.0.%"
+    production = "10.30.0.%"
   }
 
   east_web_user_data = {
@@ -387,7 +387,7 @@ locals {
 resource "aws_instance" "east_db" {
   for_each               = toset(var.environments)
   ami                    = var.ami_id_east
-  instance_type          = "t3.micro"
+  instance_type          = local.instance_type[each.key]
   subnet_id              = var.subnet_ids["${each.key}_east"]
   vpc_security_group_ids = [aws_security_group.east_db[each.key].id]
   key_name               = aws_key_pair.east.key_name
@@ -417,7 +417,7 @@ resource "aws_instance" "east_db" {
 resource "aws_instance" "east_web" {
   for_each               = toset(var.environments)
   ami                    = var.ami_id_east
-  instance_type          = "t3.micro"
+  instance_type          = local.instance_type[each.key]
   subnet_id              = var.subnet_ids["${each.key}_east"]
   vpc_security_group_ids = [aws_security_group.east_web[each.key].id]
   key_name               = aws_key_pair.east.key_name
@@ -437,8 +437,8 @@ resource "aws_instance" "east_web" {
 resource "aws_instance" "west_web" {
   for_each               = toset(var.environments)
   provider               = aws.west
-  ami                    = data.aws_ami.al2023_west.id
-  instance_type          = "t3.micro"
+  ami                    = var.ami_id_west
+  instance_type          = local.instance_type[each.key]
   subnet_id              = var.subnet_ids["${each.key}_west"]
   vpc_security_group_ids = [aws_security_group.west_web[each.key].id]
   key_name               = aws_key_pair.west.key_name
@@ -451,6 +451,31 @@ resource "aws_instance" "west_web" {
     env     = each.key
     tier    = "web"
     region  = "west"
+    project = "Moonlight"
+  }
+}
+
+# Production-only Elastic IPs: nothing else in this build gets one -
+# sandbox/staging stay disposable and cheap to churn. Without these, a
+# future instance_type or AMI change on production would silently lose
+# its public address the same way Orbit Labs' fleet did earlier this
+# session. db instances don't need one - nothing external connects to
+# them directly.
+resource "aws_eip" "east_web_prod" {
+  instance = aws_instance.east_web["production"].id
+  domain   = "vpc"
+  tags = {
+    Name    = "Moonlight production East Web EIP"
+    project = "Moonlight"
+  }
+}
+
+resource "aws_eip" "west_web_prod" {
+  provider = aws.west
+  instance = aws_instance.west_web["production"].id
+  domain   = "vpc"
+  tags = {
+    Name    = "Moonlight production West Web EIP"
     project = "Moonlight"
   }
 }
@@ -471,6 +496,13 @@ output "east_public_ips" {
 output "east_db_private_ips" {
   value = {
     for env, inst in aws_instance.east_db : env => inst.private_ip
+  }
+}
+
+output "east_db_public_ips" {
+  description = "Public IPs of the East db instances (SSH-reachable from admin IP only, for management)."
+  value = {
+    for env, inst in aws_instance.east_db : env => inst.public_ip
   }
 }
 
