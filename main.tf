@@ -158,16 +158,31 @@ resource "aws_instance" "web" {
   }
 }
 
+# Elastic IP so the public address survives stop/starts, resizes, and
+# AMI swaps. Attaching an EIP replaces the instance's original
+# auto-assigned public IP with the EIP's address - the old IP is
+# released, so anything pointing at it (like the boot-time self-signed
+# cert's CN) refers to a dead address afterward and needs regenerating.
+resource "aws_eip" "web" {
+  instance = aws_instance.web.id
+  domain   = "vpc"
+  tags = {
+    Name    = "pulsar-web-eip"
+    project = "Pulsar"
+  }
+}
+
 output "public_ip" {
-  value = aws_instance.web.public_ip
+  description = "Stable Elastic IP."
+  value       = aws_eip.web.public_ip
 }
 
 output "https_url" {
   description = "Open to the internet (self-signed cert, expect a browser warning)."
-  value       = "https://${aws_instance.web.public_ip}/"
+  value       = "https://${aws_eip.web.public_ip}/"
 }
 
 output "ssh_command" {
   description = "SSH access, admin IP only."
-  value       = "ssh -i ~/.ssh/orbit-labs-app ec2-user@${aws_instance.web.public_ip}"
+  value       = "ssh -i ~/.ssh/orbit-labs-app ec2-user@${aws_eip.web.public_ip}"
 }
