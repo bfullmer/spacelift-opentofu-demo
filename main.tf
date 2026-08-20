@@ -180,7 +180,7 @@ resource "aws_eip" "web" {
 # again or the EIP is released.
 resource "aws_ec2_instance_state" "web" {
   instance_id = aws_instance.web.id
-  state       = "running"
+  state       = "stopped"
 }
 
 output "public_ip" {
