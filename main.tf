@@ -201,8 +201,10 @@ locals {
       open(p, 'w').write(''.join(out))
       PY
 
-      echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=index.php"></head><body>Redirecting...</body></html>' > /var/www/html/index.html
-
+      # No index.html redirect trick here (unlike the old phpinfo lab): WordPress's
+      # own index.php already IS the front controller and 301-redirects back to
+      # "/" on its own. An index.html meta-refreshing to index.php fights that
+      # canonical redirect and creates an infinite loop.
       chown -R apache:apache /var/www/html
 
       # wp-cli, for theme scaffolding/activation/debugging from the shell.
