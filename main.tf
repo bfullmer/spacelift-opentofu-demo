@@ -172,6 +172,17 @@ resource "aws_eip" "web" {
   }
 }
 
+# Instance power state, managed declaratively. "stopped" halts compute
+# billing while keeping the instance, its disk, and the Elastic IP
+# association intact - flip back to "running" and apply to bring it up
+# on the same address. Note: an EIP attached to a STOPPED instance
+# accrues AWS's idle-EIP charge (~$0.005/hr) until the instance runs
+# again or the EIP is released.
+resource "aws_ec2_instance_state" "web" {
+  instance_id = aws_instance.web.id
+  state       = "stopped"
+}
+
 output "public_ip" {
   description = "Stable Elastic IP."
   value       = aws_eip.web.public_ip
